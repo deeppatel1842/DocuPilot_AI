@@ -5,6 +5,105 @@ breaks a query into steps; **research / writer / editor** agents execute them us
 **Tavily (web)**, **arXiv** and **Wikipedia** tools. Every LLM and tool call is traced,
 scored by an **LLM-as-judge**, and aggregated into a **benchmark**.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    User["User"] --> UI["User Interface / FastAPI App"]
+
+    UI --> Router["Task Router"]
+
+    Router --> PDFMode["Mode 1: NeuroDoc PDF Q&A"]
+    Router --> ResearchMode["Mode 2: Deep Research Agent"]
+    Router --> CodeMode["Mode 3: Code Generation Agent"]
+
+    subgraph PDFQA["NeuroDoc PDF Q&A Workflow"]
+        PDFMode --> Upload["Upload PDF Documents"]
+        Upload --> DocProcessor["Document Processor"]
+        DocProcessor --> Extract["Extract Text"]
+        Extract --> Chunk["Chunk Documents"]
+        Chunk --> Embed["Generate Embeddings"]
+        Embed --> VectorStore["Vector Database"]
+        VectorStore --> StoreChunks["Store Chunks and Embeddings"]
+
+        PDFMode --> AskQuestion["Ask Question"]
+        AskQuestion --> MemoryRead["Load Conversation History"]
+        AskQuestion --> QueryProcessor["Query Processor"]
+        MemoryRead --> QueryProcessor
+
+        QueryProcessor --> Retrieve["Retrieve Relevant Chunks"]
+        VectorStore --> Retrieve
+        Retrieve --> Rerank["Rerank Results"]
+        Rerank --> ContextBuilder["Build Context"]
+        ContextBuilder --> LocalLLM["Ollama Local Language Model"]
+        LocalLLM --> PDFAnswer["Answer with Citations"]
+        PDFAnswer --> MemoryWrite["Store Question and Answer"]
+        MemoryWrite --> MemorySystem["Memory System"]
+    end
+
+    subgraph ResearchAgent["DocuPilot Deep Research Agent"]
+        ResearchMode --> Planner["Planner Agent"]
+        Planner --> Executor["Budgeted Executor"]
+        Executor --> ResearchTools["Research Tools"]
+
+        ResearchTools --> Tavily["Tavily Web Search"]
+        ResearchTools --> Arxiv["arXiv Search"]
+        ResearchTools --> Wiki["Wikipedia Search"]
+
+        Tavily --> Sources["Retrieved Sources"]
+        Arxiv --> Sources
+        Wiki --> Sources
+
+        Sources --> Researcher["Research Agent"]
+        Researcher --> Writer["Writer Agent"]
+        Writer --> CitationAudit["Citation Audit and Source ID Check"]
+        CitationAudit --> Editor["Editor Agent"]
+        Editor --> ResearchReport["Final Research Report"]
+    end
+
+    subgraph CodeAgent["DocuPilot Code Generation Agent"]
+        CodeMode --> CodePlanner["Code Planner Agent"]
+        CodePlanner --> CodeWriter["Code Writer Agent"]
+        CodeWriter --> CodeReviewer["Code Review Agent"]
+        CodeReviewer --> TestGenerator["Test and Explanation Generator"]
+        TestGenerator --> CodeOutput["Final Code Output"]
+    end
+
+    subgraph Observability["Observability and Evaluation Layer"]
+        TraceLogger["Run Tracer"]
+        MetricsTracker["Metrics Tracker"]
+        Judge["LLM-as-Judge Evaluation"]
+        Benchmark["Benchmark Results"]
+        Dashboard["Telemetry Dashboard"]
+    end
+
+    PDFAnswer --> TraceLogger
+    ResearchReport --> TraceLogger
+    CodeOutput --> TraceLogger
+
+    TraceLogger --> MetricsTracker
+    TraceLogger --> Judge
+
+    MetricsTracker --> Dashboard
+    Judge --> Benchmark
+    Benchmark --> Dashboard
+
+    Dashboard --> FinalOutput["Final Output with Traces, Citations, Metrics, Cost, Latency, and Quality Scores"]
+```
+
+## Architecture Overview
+
+DocuPilot AI combines the NeuroDoc PDF Q&A foundation with a newer multi-agent research and code-generation pipeline.
+
+The PDF Q&A workflow handles PDF upload, text extraction, document chunking, embedding generation, vector storage, hybrid retrieval, reranking, context construction, local LLM answering through Ollama, citation generation, and conversation memory.
+
+The deep research workflow uses a planner agent to break a query into steps, a budgeted executor to manage context, research tools such as Tavily, arXiv, and Wikipedia, and research/writer/editor agents to produce a grounded final report with citation auditing.
+
+The code-generation workflow uses planner, writer, reviewer, and test/explanation agents to generate code outputs.
+
+All three workflows share the same observability layer, which tracks traces, token usage, cost, latency, tool calls, errors, benchmark results, citation coverage, retrieval metrics, and LLM-as-judge quality scores.
+
+
 ## Quick start
 
 ```powershell
