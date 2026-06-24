@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Multi-Agent Research Pipeline — Live Observability</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { background: #f6f7f9; color: #1f2430; }
+    .container-xl { max-width: 1400px; }
+    .card { background: #ffffff; border: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+    .card-header { background: #f8f9fb; border-bottom: 1px solid #e5e7eb; font-weight: 600; color:#111827; }
+    .muted { color: #6b7280; }
+    code { color: #b91c5c; }
+    pre.block {
+      background: #f6f8fa; border: 1px solid #e5e7eb; border-radius: 6px; color:#24292f;
+      padding: 8px 10px; white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow: auto; font-size: 12.5px; margin: 0;
+    }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight:600; border:1px solid transparent; }
+    .pill-tok { background:#eaf2ff; color:#1d4ed8; border-color:#cfe0ff; }
+    .pill-cost { background:#eafaf0; color:#177245; border-color:#c7ecd4; }
+    .pill-lat { background:#fff7e6; color:#a15c00; border-color:#ffe2ad; }
+    .pill-err { background:#fdecec; color:#b42318; border-color:#f7c9c5; }
+    .agent-planner { border-left: 4px solid #9467bd; }
+    .agent-research_agent { border-left: 4px solid #ff7f0e; }
+    .agent-writer_agent { border-left: 4px solid #2ca02c; }
+    .agent-editor_agent { border-left: 4px solid #0d6efd; }
+    .status-done { box-shadow: inset 3px 0 0 #2ca02c; }
+    .status-running { box-shadow: inset 3px 0 0 #e0a800; }
+    .status-error { box-shadow: inset 3px 0 0 #dc3545; }
+    .step-head { cursor: pointer; display:flex; align-items:center; gap:8px; }
+    .step-head:hover { background:#f3f4f6; }
+    .label { color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin: 10px 0 3px; font-weight:700; }
+    .chip {
+      display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
+      padding:6px 10px; border-radius:8px; font-size:12px; font-weight:600; color:#fff;
+      cursor:pointer; margin:3px; min-width:96px; text-align:center; border:1px solid rgba(0,0,0,.08);
+    }
+    .chip small { font-weight:500; opacity:.9; }
+    .chip-planner{ background:#9467bd; } .chip-research_agent{ background:#ff7f0e; }
+    .chip-writer_agent{ background:#2ca02c; } .chip-editor_agent{ background:#0d6efd; }
+    .chip-tool{ background:#17a2b8; } .chip-final{ background:#198754; } .chip-entry{ background:#1f77b4; }
+    .arch-flow { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
+    .arrow { color:#9ca3af; font-size:18px; padding:0 2px; }
+    .tool-call { border:1px solid #e5e7eb; border-radius:6px; padding:8px; margin-top:8px; background:#fbfcfd; }
+    .sticky-side { position: sticky; top: 12px; }
+    table.tele { width:100%; font-size:12.5px; }
+    table.tele td { padding:2px 6px; border-top:1px solid #eef0f3; }
+    .btn-soft { background:#f3f4f6; color:#374151; border:1px solid #d1d5db; }
+    .btn-soft:hover { background:#e5e7eb; color:#111827; }
+    h2 { color:#111827; } h5 { color:#111827; }
+    #report { color:#1f2430; }
+    #report :is(h1,h2,h3,h4){ color:#111827; } #report a { color:#1d4ed8; }
+    #report pre { background:#f6f8fa; padding:10px; border-radius:6px; border:1px solid #e5e7eb; }
+  </style>
+</head>
+<body class="p-3 p-lg-4">
+<div class="container-xl">
+
+  <div class="d-flex justify-content-between align-items-end flex-wrap mb-2">
+    <div>
+      <h2 class="mb-1">Multi-Agent Research Pipeline — Live Observability</h2>
+      <div class="muted">
+        A planner breaks your query into steps; research / writer / editor agents execute them
+        using web, arXiv and Wikipedia tools. Every LLM and tool call is traced live below:
+        inputs, decisions, tool I/O, tokens, cost, latency and errors.
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt -->
+  <div class="card mb-3">
+    <div class="card-body">
+      <label for="promptInput" class="form-label muted">Research prompt</label>
+      <div class="d-flex align-items-start gap-2">
+        <textarea class="form-control" id="promptInput" rows="3"
+          placeholder="e.g. Recent advances in retrieval-augmented generation for enterprise search: evaluation methods and latency trade-offs (2023-2025)."></textarea>
+        <button class="btn btn-primary px-4" id="submitBtn" onclick="submitPrompt()">Run</button>
+      </div>
+      <div class="form-text muted">Add 3-4 details to make the question specific.</div>
+    </div>
+  </div>
+
+  <!-- Status badges -->
+  <div id="statusBar" class="d-flex flex-wrap gap-2 align-items-center mb-3" style="display:none!important;"></div>
+
+  <div class="row g-3">
+    <!-- Main column -->
+    <div class="col-lg-8">
+
+      <!-- Interactive architecture (built live from the run) -->
+      <div class="card mb-3" id="archCard" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Live architecture — click any node to inspect it</span>
+          <span class="muted" style="font-size:12px;">generated from this run</span>
+        </div>
+        <div class="card-body">
+          <div id="archFlow" class="arch-flow"></div>
+        </div>
+      </div>
+
+      <!-- Pipeline timeline -->
+      <div id="plannerCard"></div>
+      <div id="timeline"></div>
+
+      <!-- Final report -->
+      <div class="card mb-3" id="reportCard" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span>Final report</span>
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-sm btn-soft" onclick="downloadReport('md')">Download .md</button>
+            <button class="btn btn-sm btn-soft" onclick="downloadReport('html')">Download .html</button>
+            <button class="btn btn-sm btn-soft" onclick="downloadTrace()">Download analysis .txt</button>
+          </div>
+        </div>
+        <div class="card-body" id="report"></div>
+      </div>
+
+      <!-- Full .txt analysis -->
+      <div class="card mb-3" id="txtCard" style="display:none;">
+        <div class="card-header step-head" onclick="toggleTxt()">
+          <span id="txtCaret">&#9654;</span> Full step-by-step analysis (.txt) — tokens, cost, latency, errors
+        </div>
+        <div class="card-body" id="txtBody" style="display:none;">
+          <pre class="block" id="txtContent" style="max-height:520px;"></pre>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-lg-4">
+      <div class="sticky-side">
+        <!-- Telemetry -->
+        <div class="card mb-3" id="teleCard" style="display:none;">
+          <div class="card-header">Live telemetry</div>
+          <div class="card-body">
+            <table class="tele" id="teleTotals"></table>
+            <div class="label">Per agent</div>
+            <table class="tele" id="teleAgents"></table>
+            <div class="label">Tools used</div>
+            <table class="tele" id="teleTools"></table>
+          </div>
+        </div>
+
+        <!-- Architecture image snapshot -->
+        <div class="card mb-3" id="archImgCard" style="display:none;">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Architecture snapshot</span>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-soft" onclick="refreshArch()">Refresh</button>
+              <a class="btn btn-sm btn-soft" id="archDownload" href="#" download>PNG</a>
+            </div>
+          </div>
+          <div class="card-body text-center">
+            <img id="archImg" alt="run architecture" style="max-width:100%; border-radius:6px; background:#fff;" />
+            <div class="muted mt-2" style="font-size:12px;">Regenerated from the actual agents and tools used.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentTaskId = null;
+let pollTimer = null;
+let lastReportMarkdown = "";
+const expanded = new Set();      // expanded step indices
+const stepSig = new Map();       // index -> signature to avoid needless re-render
+
+function esc(s){
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function trunc(s, n){
+  s = s == null ? "" : String(s);
+  return s.length <= n ? s : s.slice(0, n) + "\n... [" + (s.length - n) + " more chars; full text in .txt analysis]";
+}
+function kv(args){
+  if (args == null) return "";
+  if (typeof args === "object" && !Array.isArray(args)) {
+    return Object.entries(args).map(([k,v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+  }
+  return typeof args === "string" ? args : JSON.stringify(args);
+}
+function fmtCost(c){ return "$" + (c || 0).toFixed(6); }
+function fmtLat(l){ return (l || 0).toFixed(2) + "s"; }
+
+function submitPrompt(){
+  const prompt = document.getElementById("promptInput").value.trim();
+  if (!prompt) return;
+  setBusy(true);
+  resetUI();
+  fetch("/generate_report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt })
+  })
+  .then(r => r.json())
+  .then(data => {
+    currentTaskId = data.task_id;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(poll, 1500);
+    poll();
+  })
+  .catch(() => setBusy(false));
+}
+
+function setBusy(b){
+  document.getElementById("submitBtn").disabled = b;
+  document.getElementById("promptInput").disabled = b;
+}
+function resetUI(){
+  expanded.clear(); stepSig.clear();
+  document.getElementById("timeline").innerHTML = "";
+  document.getElementById("plannerCard").innerHTML = "";
+  document.getElementById("report").innerHTML = "";
+  document.getElementById("reportCard").style.display = "none";
+  document.getElementById("txtCard").style.display = "none";
+  document.getElementById("archImgCard").style.display = "none";
+  document.getElementById("archCard").style.display = "none";
+}
+
+function poll(){
+  if (!currentTaskId) return;
+  fetch(`/task_trace/${currentTaskId}`)
+    .then(r => r.json())
+    .then(trace => {
+      renderStatus(trace);
+      renderArchFlow(trace);
+      renderPlanner(trace);
+      renderSteps(trace.steps || []);
+      renderTelemetry(trace);
+      if (trace.final_report) renderReport(trace.final_report);
+      if (trace.status === "done" || trace.status === "error") {
+        clearInterval(pollTimer);
+        setBusy(false);
+        loadArchImage();
+        loadTxt();
+      }
+    })
+    .catch(() => {});
+}
+
+function renderStatus(trace){
+  const t = trace.totals || {};
+  const bar = document.getElementById("statusBar");
+  bar.style.setProperty("display", "flex", "important");
+  const statusColor = trace.status === "done" ? "success" : trace.status === "error" ? "danger" : "warning";
+  bar.innerHTML =
+    `<span class="badge text-bg-${statusColor}">${esc(trace.status || "")}</span>` +
+    `<span class="pill pill-tok">LLM calls ${t.llm_calls||0}</span>` +
+    `<span class="pill pill-tok">tool calls ${t.tool_calls||0}</span>` +
+    `<span class="pill pill-tok">tokens ${t.total_tokens||0}</span>` +
+    `<span class="pill pill-cost">${fmtCost(t.cost_usd)}</span>` +
+    `<span class="pill pill-lat">LLM ${fmtLat(t.llm_latency_s)}</span>` +
+    `<span class="pill pill-lat">tools ${fmtLat(t.tool_latency_s)}</span>` +
+    `<span class="pill pill-err">errors ${t.errors||0}</span>`;
+}
+
+function renderArchFlow(trace){
+  const steps = trace.steps || [];
+  const card = document.getElementById("archCard");
+  card.style.display = "block";
+  const flow = document.getElementById("archFlow");
+  let html = `<div class="chip chip-entry" onclick="scrollToEl('plannerCard')">User prompt</div><span class="arrow">&#8594;</span>`;
+  const pe = (trace.planner_events || [])[0];
+  const pt = pe ? pe.usage.total_tokens : 0;
+  html += `<div class="chip chip-planner" onclick="scrollToEl('plannerCard')">Planner<small>${pt} tok</small></div>`;
+  steps.forEach(step => {
+    html += `<span class="arrow">&#8594;</span>`;
+    const evs = step.events || [];
+    const tokens = evs.filter(e=>e.type==="llm").reduce((a,e)=>a+e.usage.total_tokens,0);
+    html += `<div class="chip chip-${esc(step.agent||'research_agent')}" onclick="openStep(${step.index})">`
+         +  `S${step.index+1} ${esc((step.agent||'').replace('_agent',''))}<small>${tokens} tok</small></div>`;
+    const tools = {};
+    evs.filter(e=>e.type==="tool").forEach(e=>{ tools[e.tool]=(tools[e.tool]||0)+1; });
+    Object.entries(tools).forEach(([tool,c])=>{
+      html += `<div class="chip chip-tool" onclick="openStep(${step.index})" title="tool call">${esc(tool.replace('_search_tool','').replace('_tool',''))}<small>x${c}</small></div>`;
+    });
+  });
+  html += `<span class="arrow">&#8594;</span><div class="chip chip-final" onclick="scrollToEl('reportCard')">Final report</div>`;
+  flow.innerHTML = html;
+}
+
+function renderPlanner(trace){
+  const pe = (trace.planner_events || [])[0];
+  const plan = trace.plan || [];
+  if (!pe && plan.length === 0) return;
+  const u = pe ? pe.usage : {prompt_tokens:0,completion_tokens:0,total_tokens:0};
+  const inputMsg = pe && pe.messages && pe.messages[0] ? pe.messages[0].content : "";
+  let planHtml = plan.map((s,i)=>`<li>${esc(s)}</li>`).join("");
+  document.getElementById("plannerCard").innerHTML = `
+    <div class="card mb-3 agent-planner">
+      <div class="card-header step-head" onclick="toggleId('plannerBody','plannerCaret')">
+        <span id="plannerCaret">&#9660;</span>
+        <span>Step 0 — Planning</span>
+        <span class="muted ms-2" style="font-size:12px;">${esc(pe ? pe.model : 'o4-mini')}</span>
+        <span class="ms-auto">
+          <span class="pill pill-tok">${u.total_tokens} tok</span>
+          <span class="pill pill-cost">${fmtCost(pe?pe.cost_usd:0)}</span>
+          <span class="pill pill-lat">${fmtLat(pe?pe.latency_s:0)}</span>
+        </span>
+      </div>
+      <div class="card-body" id="plannerBody">
+        <div class="label">Input — prompt sent to the planner</div>
+        <pre class="block">${esc(trunc(inputMsg, 1600))}</pre>
+        <div class="label">LLM decision — raw planner output</div>
+        <pre class="block">${esc(trunc(pe ? pe.content : "", 1600))}</pre>
+        ${pe && pe.error ? `<div class="label">Error</div><pre class="block" style="color:#b42318;">${esc(pe.error)}</pre>` : ""}
+        <div class="label">Parsed plan (${plan.length} steps)</div>
+        <ol>${planHtml}</ol>
+      </div>
+    </div>`;
+}
+
+function buildStepCard(step){
+  const idx = step.index;
+  const evs = step.events || [];
+  const llm = evs.filter(e => e.type === "llm");
+  const tools = evs.filter(e => e.type === "tool");
+  const tokens = llm.reduce((a,e)=>a+e.usage.total_tokens,0);
+  const cost = llm.reduce((a,e)=>a+e.cost_usd,0);
+  const lat = llm.reduce((a,e)=>a+e.latency_s,0) + tools.reduce((a,e)=>a+e.latency_s,0);
+  const agent = step.agent || "?";
+  const model = llm[0] ? llm[0].model : "-";
+  const icon = step.status === "done" ? "&#9989;" : step.status === "running" ? "&#9203;" : step.status === "error" ? "&#10060;" : "&#8226;";
+
+  let inputHtml = "";
+  if (llm[0] && llm[0].messages) {
+    inputHtml = llm[0].messages.map(m =>
+      `<div class="muted" style="font-size:11px;">&lt;${esc(m.role)}&gt;</div><pre class="block">${esc(trunc(m.content, 1400))}</pre>`
+    ).join("");
+  }
+  let decHtml = "";
+  llm.forEach(e => (e.tool_decisions || []).forEach(d => {
+    decHtml += `<div>turn ${d.turn}: <code>${esc(d.tool)}(${esc(kv(d.arguments))})</code></div>`;
+  }));
+  let toolHtml = "";
+  tools.forEach((e,i) => {
+    let out = e.error ? ("ERROR: " + e.error) : trunc(JSON.stringify(e.result, null, 2), 1800);
+    toolHtml += `<div class="tool-call">
+      <div><strong>${esc(e.tool)}</strong> <span class="pill pill-lat">${fmtLat(e.latency_s)}</span></div>
+      <div class="muted" style="font-size:11px; margin-top:4px;">input</div>
+      <pre class="block">${esc(kv(e.arguments))}</pre>
+      <div class="muted" style="font-size:11px;">output</div>
+      <pre class="block">${esc(out)}</pre>
+    </div>`;
+  });
+
+  const open = expanded.has(idx) || step.status === "running";
+  return `
+    <div class="card mb-3 agent-${esc(agent)} status-${esc(step.status)}">
+      <div class="card-header step-head" onclick="toggleStep(${idx})">
+        <span>${icon}</span>
+        <span>Step ${idx+1} — ${esc(step.title || "")}</span>
+        <span class="muted ms-2" style="font-size:12px;">${esc(agent)} / ${esc(model)}</span>
+        <span class="ms-auto">
+          <span class="pill pill-tok">${tokens} tok</span>
+          <span class="pill pill-cost">${fmtCost(cost)}</span>
+          <span class="pill pill-lat">${fmtLat(lat)}</span>
+        </span>
+      </div>
+      <div class="card-body" id="stepbody-${idx}" style="display:${open ? 'block':'none'};">
+        ${inputHtml ? `<div class="label">Input — context/task given to the agent</div>${inputHtml}` : ""}
+        ${decHtml ? `<div class="label">Reasoning — tool-call decisions</div>${decHtml}` : ""}
+        ${toolHtml ? `<div class="label">Tool execution — actual inputs and outputs</div>${toolHtml}` : ""}
+        ${(llm.find(e=>e.error)||{}).error ? `<div class="label">Error</div><pre class="block" style="color:#b42318;">${esc((llm.find(e=>e.error)||{}).error)}</pre>` : ""}
+        <div class="label">Output — result of this step</div>
+        <pre class="block">${esc(trunc(step.output, 2400))}</pre>
+      </div>
+    </div>`;
+}
+
+function renderSteps(steps){
+  const container = document.getElementById("timeline");
+  steps.forEach(step => {
+    const sig = JSON.stringify([step.status, (step.events||[]).length, (step.output||"").length, step.agent, expanded.has(step.index)]);
+    if (stepSig.get(step.index) === sig) return;
+    stepSig.set(step.index, sig);
+    let el = document.getElementById("stepcard-" + step.index);
+    if (!el) { el = document.createElement("div"); el.id = "stepcard-" + step.index; container.appendChild(el); }
+    el.innerHTML = buildStepCard(step);
+  });
+}
+
+function toggleStep(idx){
+  if (expanded.has(idx)) expanded.delete(idx); else expanded.add(idx);
+  const body = document.getElementById("stepbody-" + idx);
+  if (body) body.style.display = body.style.display === "none" ? "block" : "none";
+}
+function openStep(idx){
+  expanded.add(idx);
+  const body = document.getElementById("stepbody-" + idx);
+  if (body) body.style.display = "block";
+  scrollToEl("stepcard-" + idx);
+}
+function toggleId(bodyId, caretId){
+  const b = document.getElementById(bodyId);
+  const c = document.getElementById(caretId);
+  const show = b.style.display === "none";
+  b.style.display = show ? "block" : "none";
+  if (c) c.innerHTML = show ? "&#9660;" : "&#9654;";
+}
+function scrollToEl(id){
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderTelemetry(trace){
+  document.getElementById("teleCard").style.display = "block";
+  const t = trace.totals || {};
+  document.getElementById("teleTotals").innerHTML = `
+    <tr><td>LLM calls</td><td>${t.llm_calls||0}</td></tr>
+    <tr><td>Tool calls</td><td>${t.tool_calls||0}</td></tr>
+    <tr><td>Prompt tokens</td><td>${t.prompt_tokens||0}</td></tr>
+    <tr><td>Completion tokens</td><td>${t.completion_tokens||0}</td></tr>
+    <tr><td>Total tokens</td><td>${t.total_tokens||0}</td></tr>
+    <tr><td>Estimated cost</td><td>${fmtCost(t.cost_usd)}</td></tr>
+    <tr><td>LLM latency</td><td>${fmtLat(t.llm_latency_s)}</td></tr>
+    <tr><td>Tool latency</td><td>${fmtLat(t.tool_latency_s)}</td></tr>
+    <tr><td>Errors</td><td>${t.errors||0}</td></tr>`;
+  const pa = trace.per_agent || {};
+  document.getElementById("teleAgents").innerHTML = Object.entries(pa).map(([a,r]) =>
+    `<tr><td>${esc(a)}</td><td>${r.calls} call / ${r.tokens} tok / ${fmtCost(r.cost)}</td></tr>`).join("") || `<tr><td class="muted">none yet</td></tr>`;
+  const pt = trace.per_tool || {};
+  document.getElementById("teleTools").innerHTML = Object.entries(pt).map(([tool,r]) =>
+    `<tr><td>${esc(tool)}</td><td>x${r.calls} / ${fmtLat(r.latency)} / err ${r.errors}</td></tr>`).join("") || `<tr><td class="muted">none yet</td></tr>`;
+}
+
+function renderReport(md){
+  if (md === lastReportMarkdown) return;
+  lastReportMarkdown = md;
+  document.getElementById("reportCard").style.display = "block";
+  document.getElementById("report").innerHTML = marked.parse(md);
+}
+
+function loadArchImage(){
+  document.getElementById("archImgCard").style.display = "block";
+  refreshArch();
+}
+function refreshArch(){
+  if (!currentTaskId) return;
+  const url = `/task_architecture/${currentTaskId}?t=${Date.now()}`;
+  document.getElementById("archImg").src = url;
+  document.getElementById("archDownload").href = url;
+}
+function loadTxt(){
+  if (!currentTaskId) return;
+  fetch(`/task_trace_txt/${currentTaskId}`)
+    .then(r => r.text())
+    .then(txt => {
+      document.getElementById("txtCard").style.display = "block";
+      document.getElementById("txtContent").textContent = txt;
+    });
+}
+function toggleTxt(){
+  const b = document.getElementById("txtBody");
+  const c = document.getElementById("txtCaret");
+  const show = b.style.display === "none";
+  b.style.display = show ? "block" : "none";
+  c.innerHTML = show ? "&#9660;" : "&#9654;";
+}
+
+function downloadReport(kind){
+  if (!lastReportMarkdown) return;
+  let content = lastReportMarkdown, type = "text/markdown", ext = "md";
+  if (kind === "html") { content = marked.parse(lastReportMarkdown); type = "text/html"; ext = "html"; }
+  saveBlob(content, type, `report_${currentTaskId}.${ext}`);
+}
+function downloadTrace(){
+  if (!currentTaskId) return;
+  fetch(`/task_trace_txt/${currentTaskId}`).then(r => r.text()).then(txt =>
+    saveBlob(txt, "text/plain", `analysis_${currentTaskId}.txt`));
+}
+function saveBlob(content, type, filename){
+  const blob = new Blob([content], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

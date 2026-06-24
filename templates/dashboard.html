@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Telemetry & Benchmark Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body { background: #f6f7f9; color: #1f2430; }
+    .container-xl { max-width: 1500px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+    .card-header { background: #f8f9fb; border-bottom: 1px solid #e5e7eb; font-weight: 600; color:#111827; }
+    .muted { color:#6b7280; }
+    h2,h5 { color:#111827; }
+    .stat { border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; background:#fff; }
+    .stat .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; font-weight:700; }
+    .stat .val { font-size:20px; font-weight:700; color:#0f172a; }
+    .stat .accent { height:4px; border-radius:3px; margin-bottom:8px; }
+    table.runs { width:100%; font-size:12.5px; border-collapse:collapse; }
+    table.runs th, table.runs td { padding:6px 8px; border-bottom:1px solid #eef0f3; text-align:right; white-space:nowrap; }
+    table.runs th { background:#f8f9fb; position:sticky; top:0; color:#374151; font-weight:700; text-align:right; }
+    table.runs td.l, table.runs th.l { text-align:left; }
+    .grade { font-weight:700; padding:1px 7px; border-radius:999px; }
+    .gA{background:#e7f7ec;color:#137a3a;} .gB{background:#eaf2ff;color:#1d4ed8;}
+    .gC{background:#fff7e6;color:#a15c00;} .gD{background:#fdecec;color:#b42318;} .gF{background:#fdecec;color:#b42318;}
+    .pillbar { height:8px; background:#eef0f3; border-radius:6px; overflow:hidden; min-width:60px; display:inline-block; vertical-align:middle;}
+    .pillbar > span { display:block; height:100%; background:#2563eb; }
+    a.link { color:#1d4ed8; text-decoration:none; }
+    .scroll { overflow:auto; max-height:70vh; }
+    .wrongrow td { background:#fffafa; color:#7a1f1f; font-size:12px; text-align:left; white-space:normal; }
+    .toprow { cursor:pointer; }
+    .toprow:hover td { background:#f3f6ff; }
+  </style>
+</head>
+<body class="p-3 p-lg-4">
+<div class="container-xl">
+  <div class="d-flex justify-content-between align-items-end flex-wrap mb-3">
+    <div>
+      <h2 class="mb-1">Telemetry &amp; Benchmark Dashboard</h2>
+      <div class="muted">Per-run cost, latency, tokens, tool success, retrieval quality (precision / recall / F1 / MRR),
+        citation coverage and LLM-as-judge report scores. <a class="link" href="/">&larr; back to runner</a></div>
+    </div>
+    <button class="btn btn-outline-secondary btn-sm" onclick="loadAll()">Refresh</button>
+  </div>
+
+  <!-- Benchmark aggregate -->
+  <div class="card mb-3" id="benchCard" style="display:none;">
+    <div class="card-header d-flex justify-content-between">
+      <span>Benchmark aggregate</span><span class="muted" id="benchMeta" style="font-size:12px;"></span>
+    </div>
+    <div class="card-body">
+      <div class="row g-2" id="benchStats"></div>
+    </div>
+  </div>
+  <div class="card mb-3" id="noBench">
+    <div class="card-body muted">
+      No benchmark yet. Run <code>python scripts/benchmark.py 5</code> (or up to the full prompt set) to populate the aggregate.
+      The per-run table below fills in automatically as runs complete.
+    </div>
+  </div>
+
+  <!-- Per-run table -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+      <span>All runs (<span id="runCount">0</span>)</span>
+      <span class="muted" style="font-size:12px;">click a row to see "where it went wrong"</span>
+    </div>
+    <div class="card-body scroll">
+      <table class="runs" id="runsTable">
+        <thead><tr>
+          <th class="l">prompt</th><th>status</th><th>tokens</th><th>prompt&nbsp;tok</th><th>cost&nbsp;$</th>
+          <th>latency&nbsp;s</th><th>tool&nbsp;ok</th><th>tool&nbsp;err</th><th>src</th><th>cite&nbsp;cov</th>
+          <th>quality</th><th>instr</th><th>faith</th><th>prec</th><th>rec*</th><th>F1</th><th>MRR</th><th>files</th>
+        </tr></thead>
+        <tbody id="runsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="muted" style="font-size:12px;">
+    rec* = LLM coverage-proxy recall (no labelled ground-truth set). tool&nbsp;err counts tool calls that
+    returned an error payload (e.g. arXiv unreachable) even though no exception was raised.
+  </div>
+</div>
+
+<script>
+function esc(s){ if(s==null) return ""; return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function num(v, d){ return (v==null||isNaN(v)) ? "—" : Number(v).toFixed(d); }
+function pct(v){ return (v==null||isNaN(v)) ? "—" : (Number(v)*100).toFixed(0)+"%"; }
+function gradeClass(g){ return "grade g"+(g||"F"); }
+
+function stat(label, value, accent){
+  return `<div class="col-6 col-md-3 col-xl-2"><div class="stat"><div class="accent" style="background:${accent}"></div>
+    <div class="lbl">${esc(label)}</div><div class="val">${esc(value)}</div></div></div>`;
+}
+
+function loadBenchmark(){
+  return fetch('/benchmark').then(r=>r.json()).then(b=>{
+    if(!b || !b.available || !b.aggregate){ document.getElementById('benchCard').style.display='none';
+      document.getElementById('noBench').style.display='block'; return; }
+    document.getElementById('noBench').style.display='none';
+    const c = document.getElementById('benchCard'); c.style.display='block';
+    document.getElementById('benchMeta').textContent =
+      `${b.n_runs} runs · generated ${b.generated_at||''}`;
+    const a = b.aggregate;
+    const cards = [
+      stat('avg cost', '$'+num(a.avg_cost_usd,4), '#16a34a'),
+      stat('avg latency', num(a.avg_latency_s,1)+'s', '#d97706'),
+      stat('P50 latency', num(a.p50_latency_s,1)+'s', '#d97706'),
+      stat('P95 latency', num(a.p95_latency_s,1)+'s', '#dc2626'),
+      stat('P99 latency', num(a.p99_latency_s,1)+'s', '#dc2626'),
+      stat('avg tokens', Math.round(a.avg_total_tokens||0), '#7c3aed'),
+      stat('avg prompt tok', Math.round(a.avg_prompt_tokens||0), '#7c3aed'),
+      stat('tool success', pct(a.tool_success_rate), '#0891b2'),
+      stat('error rate', pct(a.error_rate), '#dc2626'),
+      stat('avg sources', num(a.avg_sources_retrieved,1), '#2563eb'),
+      stat('citation cov', pct(a.avg_citation_coverage), '#0ea5e9'),
+      stat('avg quality', num(a.avg_quality_overall,1), '#16a34a'),
+      stat('instr-follow', num(a.avg_instruction_following,1), '#16a34a'),
+      stat('faithfulness', num(a.avg_faithfulness,1), '#16a34a'),
+      stat('precision', num(a.avg_retrieval_precision,2), '#2563eb'),
+      stat('recall*', num(a.avg_retrieval_recall,2), '#2563eb'),
+      stat('F1', num(a.avg_retrieval_f1,2), '#2563eb'),
+      stat('MRR', num(a.avg_retrieval_mrr,2), '#2563eb'),
+    ];
+    document.getElementById('benchStats').innerHTML = cards.join('');
+  }).catch(()=>{});
+}
+
+function loadRuns(){
+  return fetch('/runs').then(r=>r.json()).then(d=>{
+    document.getElementById('runCount').textContent = d.count;
+    const body = document.getElementById('runsBody');
+    body.innerHTML = (d.runs||[]).map((m,i)=>{
+      const g = m.quality_grade;
+      const rowMain = `<tr class="toprow" onclick="toggleWrong(${i})">
+        <td class="l" title="${esc(m.prompt)}">${esc((m.prompt||'').slice(0,70))}</td>
+        <td>${esc(m.status||'')}</td>
+        <td>${m.total_tokens??'—'}</td>
+        <td>${m.prompt_tokens??'—'}</td>
+        <td>${num(m.cost_usd,4)}</td>
+        <td>${num(m.wall_time_s,1)}</td>
+        <td>${pct(m.tool_success_rate)}</td>
+        <td>${pct(m.tool_error_rate)}</td>
+        <td>${m.sources_retrieved??'—'}</td>
+        <td>${pct(m.citation_coverage)}</td>
+        <td>${m.quality_overall!=null?(m.quality_overall+' '):''}<span class="${gradeClass(g)}">${esc(g||'—')}</span></td>
+        <td>${m.instruction_following??'—'}</td>
+        <td>${m.faithfulness??'—'}</td>
+        <td>${num(m.retrieval_precision,2)}</td>
+        <td>${num(m.retrieval_recall,2)}</td>
+        <td>${num(m.retrieval_f1,2)}</td>
+        <td>${num(m.retrieval_mrr,2)}</td>
+        <td>${m.arch_url?`<a class="link" href="${m.arch_url}" target="_blank">img</a> `:''}${m.txt_url?`<a class="link" href="${m.txt_url}" target="_blank">txt</a>`:''}</td>
+      </tr>`;
+      const wrong = (m.where_it_went_wrong||'').trim();
+      const rowWrong = `<tr class="wrongrow" id="wrong-${i}" style="display:none;"><td colspan="18">
+        <strong>Where it went wrong:</strong> ${esc(wrong||'(no critique recorded — evaluation may be disabled for this run)')}</td></tr>`;
+      return rowMain + rowWrong;
+    }).join('');
+  }).catch(()=>{});
+}
+
+function toggleWrong(i){
+  const el = document.getElementById('wrong-'+i);
+  if(el) el.style.display = el.style.display==='none' ? 'table-row' : 'none';
+}
+
+function loadAll(){ loadBenchmark(); loadRuns(); }
+loadAll();
+setInterval(loadRuns, 5000);
+</script>
+</body>
+</html>
